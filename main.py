@@ -1,4 +1,5 @@
 import numpy as np
+from qaoa import qaoa_circuit_knapsack
 
 # 0-1 knapsack problem, example data
 items_values = {
@@ -33,35 +34,6 @@ items_weights_tut = {
 }
 max_cap_tut = 26
 
-# calculate cost function (in QUBO representation) matrix Q
-# by calculation we get: Q_ij = 2 * lambda * w_i * w_j
-# and: Q_ii = -v_i + lambda * w_i * (w_i - 2 * max_cap)
-lambd = 2
-def calculate_Q_matrix(items_values, items_weights, max_cap):
-    n = len(items_values)
-
-    # add slack variables
-    slack_variable_count = round(np.ceil(np.log2(max_cap)))
-    values = list(items_values.values()) + [0 for _ in range(slack_variable_count)]
-    weights = list(items_weights.values()) + [2**k for k in range(slack_variable_count)]
-    # number of qubits (number of items + number of slack variables)
-    N = n + slack_variable_count
-
-    Q = np.empty(shape=(N,N))
-
-    for i in range(N):
-        Q[i,i] = -values[i] + lambd * weights[i] * (weights[i] - 2 * max_cap)
-        for j in range(i + 1, N):
-            Q[i, j]  = 2 * lambd * weights[i] * weights[j]
-
-    offset = lambd * max_cap**2
-
-    Q_rounded = np.rint(Q)
-    print("\n==== QUBO Q matrix from tut ====")
-    print(Q_rounded)
-    print("offset: ", offset)
-    print("")
-    return Q_rounded, offset
 
 
 # calculate the Ising Hamiltonian of the given Q matrix (of the QUBO formulation)
@@ -91,17 +63,6 @@ def calculate_hamiltonian_tut(Q, offset):
     print("offset: ", offset)
     print("")
 
-def calculate_hamiltonian_vector_b(Q, offset):
-    b = {}
-    n = len(Q)
-    for i in range(n):
-        b[i] = -sum([Q[i,j] + Q[j,i] for j in range(n)])
-
-    b_rounded = [round(b[i]) for i in range(n)]
-
-    print("\n== Hamiltonian from qiskit formula ==")
-    print("vector b", b_rounded)
-    print("")
 
 
 # brute force solution
@@ -144,7 +105,9 @@ def optimize_knapsack_bruteforce(items_values, items_weights, max_cap):
     return optimal_config
 
 
-optimize_knapsack_bruteforce(items_values, items_weights, 15)
-Q, offset = calculate_Q_matrix(items_values_tut, items_weights_tut, 26)
-calculate_hamiltonian_tut(Q, offset)
-calculate_hamiltonian_vector_b(Q, offset)
+# optimize_knapsack_bruteforce(items_values, items_weights, 15)
+# Q, offset = calculate_Q_matrix(items_values_tut, items_weights_tut, 26)
+# calculate_hamiltonian_tut(Q, offset)
+# calculate_hamiltonian_vector_b(Q, offset)
+
+qaoa_circuit_knapsack(items_values, items_weights, max_cap)
