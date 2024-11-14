@@ -1,21 +1,25 @@
 import numpy as np
-from qiskit import QuantumCircuit
+from qiskit import QuantumCircuit, transpile
+from qiskit.circuit import Parameter
 import matplotlib.pyplot as plt
 import math
 from qiskit.quantum_info import Pauli
 from qiskit.primitives import StatevectorEstimator
+from qiskit.result import counts
+from qiskit_aer import AerSimulator
 from qiskit_ibm_runtime import EstimatorV2 as Estimator
 from qiskit_ibm_runtime.fake_provider import FakeManilaV2
 from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 from qiskit_ibm_runtime import SamplerV2 as Sampler
 # from qiskit_aer import AerSimulator
 from qiskit_ibm_runtime import Session
+from qiskit.visualization import plot_histogram, plot_state_city
+from knapsack import get_bitstring_knapsack_score, optimize_knapsack_bruteforce, items_values, items_weights, max_cap, is_bitstring_valid
 
 # calculate cost function (in QUBO representation) matrix Q
 # by calculation we get: Q_ij = 2 * lambda * w_i * w_j
 # and: Q_ii = -v_i + lambda * w_i * (w_i - 2 * max_cap)
-lambd = 2
-def calculate_Q_matrix(items_values, items_weights, max_cap):
+def calculate_Q_matrix(penalty_lambda):
     n = len(items_values)
 
     # add slack variables
@@ -28,18 +32,13 @@ def calculate_Q_matrix(items_values, items_weights, max_cap):
     Q = np.empty(shape=(N,N))
 
     for i in range(N):
-        Q[i,i] = -values[i] + lambd * weights[i] * (weights[i] - 2 * max_cap)
+        Q[i,i] = -values[i] + penalty_lambda * weights[i] * (weights[i] - 2 * max_cap)
         for j in range(i + 1, N):
-            Q[i, j]  = 2 * lambd * weights[i] * weights[j]
+            Q[i, j]  = 2 * penalty_lambda * weights[i] * weights[j]
 
-    offset = lambd * max_cap**2
+    offset = penalty_lambda * max_cap**2
 
-    Q_rounded = np.rint(Q)
-    print("\n==== QUBO Q matrix from tut ====")
-    print(Q_rounded)
-    print("offset: ", offset)
-    print("")
-    return Q_rounded, offset
+    return Q, offset
 
 def calculate_hamiltonian_vector_b(Q):
     b = {}
@@ -47,58 +46,52 @@ def calculate_hamiltonian_vector_b(Q):
     for i in range(n):
         b[i] = -sum([Q[i,j] + Q[j,i] for j in range(n)])
 
-    b_rounded = [round(b[i]) for i in range(n)]
-
-    print("\n== Hamiltonian from qiskit formula ==")
-    print("vector b", b_rounded)
-    print("")
-    return b_rounded
+    return b
 
 
 # creates a quantum circuit for qaoa applied to the knapsack problem with given knapsack problem input
-def qaoa_circuit_knapsack(items_values : dict, items_weights : dict, max_cap):
+# p_layers must be >= 2
+def qaoa_circuit_knapsack_linear_schedule(penalty_lambda, p_layers, shots=10000):
 
     if len(items_values) != len(items_weights):
         raise ValueError('invalid input values or weights')
 
-    print("Running qaoa knapsack circuit")
-
-    Q, offset = calculate_Q_matrix(items_values, items_weights, max_cap)
+    Q, offset = calculate_Q_matrix(penalty_lambda)
     b = calculate_hamiltonian_vector_b(Q)
 
     num_slack_variables = math.ceil(math.log2(max_cap))
     # number of qubits equals number of items + slack variables
     num_items = len(items_values)
     num_qubits = num_items + num_slack_variables
-    print("Numer of qubits: " + str(num_qubits))
+    # print("Numer of qubits: " + str(num_qubits), "(", num_items, " items, ", num_slack_variables, " slack variables)")
 
     # quantum circuit
-    qc = QuantumCircuit(num_qubits)
+    qc = QuantumCircuit(num_qubits, num_items)
 
     # apply hadamard gate to all qubits
     for i in range(num_qubits):
         qc.h(i)
 
     # number of layers (repetitions of cost and mixer layer)
-    p = 5 # default: 10
+    # p = 10 # default: 10 (=> number of qubits)
 
-    # qaoa as trotterization of quantum adiabatic algorithm
+    # qaoa as trotterization of quantum adiabatic algorithm (linear schedule)
     # => move beta from 1 to 0 and gamma from 0 to 1
     # => skip optimization part in QAOA
-    gammas = [round(i / (p-1), 2) for i in range(p)]
+    gammas = [round(i / (p_layers - 1), 2) for i in range(p_layers)]
 
     betas = gammas.copy()
     betas.reverse()
 
-    print("gammas: ", gammas)
-    print("betas: ", betas)
+    # print("gammas: ", gammas)
+    # print("betas: ", betas)
 
     # all qubit pairs
     pairs = [(a,b) for i, a in enumerate(range(num_qubits)) for b in range(num_qubits)[i + 1:]]
-    print(pairs)
+    # print(pairs)
 
     # p repetitions of cost and mixer layer
-    for layer in range(p):
+    for layer in range(p_layers):
         # apply cost layer
         # single z rotations
         for i in range(num_qubits):
@@ -111,54 +104,152 @@ def qaoa_circuit_knapsack(items_values : dict, items_weights : dict, max_cap):
         for i in range(num_qubits):
             qc.rx(2 * betas[layer], i)
 
+
     # measure qubits (should I?)
-    qc.measure_all()
+    for i in range(num_items):
+        qc.measure(i, i)
 
     # draw circuit
-    qc.draw(output="mpl")
-    plt.savefig("circuit.png")
-
-
-    # StatevectorEstimator
-    # observables = Pauli('Z' * num_qubits)
-    # print("observables: ", observables)
-    #
-    # estimator = StatevectorEstimator()
-    #
-    # pub = (qc, observables)
-    # job = estimator.run([pub])
-    # result = job.result()[0]
-    #
-    # print(result)
-    #
-    # for idx, pauli in enumerate(observables):
-    #     plt.plot(result.data.evs[idx], label=pauli)
-    # plt.legend()
-
-
-    # estimate results (number of qubits greater than device, has only 5 qubits)
-    # fake_manila = FakeManilaV2()
-    # pm = generate_preset_pass_manager(backend=fake_manila, optimization_level=1)
-    # isa_qc = pm.run(qc)
-    #
-    # options = {"simulator": {"seed_simulator": 42}}
-    # sampler = Sampler(mode=fake_manila, options=options)
-    #
-    # result = sampler.run([isa_qc]).result()
-    # print(result)
+    # qc.draw(output="mpl")
+    # plt.savefig("circuit.png")
 
     # simulate the quantum circuit locally using aer (cannot be installed)
-    # aer_sim = AerSimulator()
+    aer_sim = AerSimulator()
+    circ = transpile(qc, aer_sim)
+    result = aer_sim.run(circ, shots=shots).result()
+    counts = result.get_counts(circ)
+
+    # optionally plot histogram
+    # plot_histogram(counts, title="Bell-State counts", filename="histogram")
+
+    return counts
+
+
+# creates a quantum circuit for qaoa applied to the knapsack problem with given knapsack problem input
+def qaoa_circuit_knapsack_parameterized(penalty_lambda, p_layers):
+
+    if len(items_values) != len(items_weights):
+        raise ValueError('invalid input values or weights')
+
+    Q, offset = calculate_Q_matrix(penalty_lambda)
+    b = calculate_hamiltonian_vector_b(Q)
+
+    num_slack_variables = math.ceil(math.log2(max_cap))
+    # number of qubits equals number of items + slack variables
+    num_items = len(items_values)
+    num_qubits = num_items + num_slack_variables
+    # print("Numer of qubits: " + str(num_qubits), "(", num_items, " items, ", num_slack_variables, " slack variables)")
+
+    # parameters
+    gamma = Parameter("gamma")
+    beta = Parameter("beta")
+
+    # quantum circuit
+    qc = QuantumCircuit(num_qubits, num_items)
+
+    # apply hadamard gate to all qubits
+    for i in range(num_qubits):
+        qc.h(i)
+
+    # number of layers (repetitions of cost and mixer layer)
+    # p = 10 # default: 10 (=> number of qubits)
+
+    # print("gammas: ", gammas)
+    # print("betas: ", betas)
+
+    # all qubit pairs
+    pairs = [(a,b) for i, a in enumerate(range(num_qubits)) for b in range(num_qubits)[i + 1:]]
+    # print(pairs)
+
+    # p repetitions of cost and mixer layer
+    for layer in range(p_layers):
+        # apply cost layer
+        # single z rotations
+        for i in range(num_qubits):
+            qc.rz(2 * gamma *  b[i], i)
+        # double z rotations
+        for i,j in pairs:
+            qc.rzz(2 * gamma * Q[i,j], i, j)
+
+        # apply mixer layer
+        for i in range(num_qubits):
+            qc.rx(2 * beta, i)
+
+
+    # measure qubits (should I?)
+    for i in range(num_items):
+        qc.measure(i, i)
+
+    # draw circuit
+    # qc.draw(output="mpl")
+    # plt.savefig("circuit.png")
+
+    # simulate the quantum circuit locally using aer (cannot be installed)
+    shots = 10000
+    aer_sim = AerSimulator()
     # pm = generate_preset_pass_manager(backend=aer_sim, optimization_level=1)
     # isa_qc = pm.run(qc)
-    # with Session(backend=aer_sim) as session:
-    #     sampler = Sampler(mode=session)
-    #     result = sampler.run([isa_qc]).result()
+    circ = transpile(qc, aer_sim)
+    # circ.save_statevector()
+    result = aer_sim.run(circ, shots=shots).result()
+    counts = result.get_counts(circ)
+
+
+# get benchmark score for given qaoa configuration
+def qaoa_benchmark(penalty_lambda, p_layers, shots, optimal_config):
+
+    counts = qaoa_circuit_knapsack_linear_schedule(penalty_lambda, p_layers, shots)
+
+    # get value of configuration from most sampled bitstring
+    most_sampled_bitstring = None
+    max_sample = -1
+    for bitstring in counts:
+        if counts[bitstring] > max_sample:
+            most_sampled_bitstring = bitstring
+            max_sample = counts[bitstring]
+
+    # get number of invalid bitstrings
+    valid_count = 0
+    for bitstring in counts:
+        if is_bitstring_valid(bitstring):
+            valid_count += counts[bitstring]
+
+    if valid_count == shots:
+        print("???")
+        print(counts)
+
+    val = get_bitstring_knapsack_score(most_sampled_bitstring, optimal_config)
+    print("lambda=", penalty_lambda, ", p=", p_layers, ": val of best solution: ", val)
+    print("number of samples: ", shots, ", valid bitstrings samples: " , valid_count, "(",  valid_count / shots * 100, "%)" )
+    return val
+
+# tries different values for the parameters p and lambda and benchmarks the QAOA result
+# by getting the value of the most sampled solution from the QAOA
+def optimize_qaoa(shots=10000):
+    optimal_config = optimize_knapsack_bruteforce()
+
+    max = -1
+    max_config = None
+    for penalty_lambda in [0.5, 1, 2, 5, 10, 50, 100, 200]:
+        for p_layers in [2, 3, 5, 10, 12, 15, 20]:
+            val = qaoa_benchmark(penalty_lambda, p_layers, shots, optimal_config)
+            print("lambda=", penalty_lambda, "p=", p_layers,", val of best solution: ", val)
+            if val > max:
+                max_config = {
+                    "penalty_lambda": penalty_lambda,
+                    "p_layers": p_layers,
+                    "val": val
+                }
+                max = val
+
+    print("Best config: ")
+    print(max_config)
+    if "val" in max_config:
+        print("With val: ", max_config["val"])
+
+    # first experiment gives: lambda=1, p_layers=15 (?)
+    # first experiment gives: lambda=0, p_layers=5 (?) (1278 samples of optimum (10K samples total))
 
 # summary
-# - qiskit-aer cannot be installed via pip (problem with C compiler, or python 32 bit (shouldnt be))
 # - TODO: estimation or sampling using simulator to get expectation values/early results => verify circuit
 # - either let circuit be "adiabatic" (parameters fixed before) or do actual optimizing
-# - statevectorEstimator: how should observable be set? (Pauli Z_1, ..., Z_n word?)
-# - statevectorSampler: only with parameterized circuit?
-# - should circuit measured in the end?
