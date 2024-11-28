@@ -1,67 +1,109 @@
+from knapsack import get_bitstring_knapsack_score, optimize_knapsack_bruteforce, is_bitstring_valid, Knapsack
 import numpy as np
-from qiskit import QuantumCircuit, transpile
-from qiskit.circuit import Parameter
-import matplotlib.pyplot as plt
 import math
-from qiskit.quantum_info import Pauli
-from qiskit.primitives import StatevectorEstimator
-from qiskit.result import counts
+from enum import Enum
+from qiskit import *
+from qiskit.circuit import Parameter
 from qiskit_aer import AerSimulator
-from qiskit_ibm_runtime import EstimatorV2 as Estimator
-from qiskit_ibm_runtime.fake_provider import FakeManilaV2
-from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
-from qiskit_ibm_runtime import SamplerV2 as Sampler
-# from qiskit_aer import AerSimulator
-from qiskit_ibm_runtime import Session
-from qiskit.visualization import plot_histogram, plot_state_city
-from knapsack import get_bitstring_knapsack_score, optimize_knapsack_bruteforce, items_values, items_weights, max_cap, is_bitstring_valid
+from qiskit.quantum_info import SparsePauliOp, Operator
+import matplotlib.pyplot as plt
+from qiskit.quantum_info.operators.symplectic import Pauli
+
 
 # calculate cost function (in QUBO representation) matrix Q
-# by calculation we get: Q_ij = 2 * lambda * w_i * w_j
-# and: Q_ii = -v_i + lambda * w_i * (w_i - 2 * max_cap)
 def calculate_Q_matrix(penalty_lambda):
-    n = len(items_values)
+    n = len(Knapsack.items_values)
 
     # add slack variables
-    slack_variable_count = round(np.ceil(np.log2(max_cap)))
-    values = list(items_values.values()) + [0 for _ in range(slack_variable_count)]
-    weights = list(items_weights.values()) + [2**k for k in range(slack_variable_count)]
+    slack_variable_count = round(np.ceil(np.log2(Knapsack.max_cap)))
+    values = list(Knapsack.items_values.values()) + [0 for _ in range(slack_variable_count)]
+    weights = list(Knapsack.items_weights.values()) + [2**k for k in range(slack_variable_count)]
     # number of qubits (number of items + number of slack variables)
     N = n + slack_variable_count
 
-    Q = np.empty(shape=(N,N))
+    Q = np.zeros(shape=(N,N))
 
     for i in range(N):
-        Q[i,i] = -values[i] + penalty_lambda * weights[i] * (weights[i] - 2 * max_cap)
-        for j in range(i + 1, N):
-            Q[i, j]  = 2 * penalty_lambda * weights[i] * weights[j]
+        Q[i,i] = -values[i] + penalty_lambda * weights[i] * (weights[i] - 2 * Knapsack.max_cap)
+        for j in range(N):
+            if i == j: continue # TODO: change back
+            Q[i, j] = 2 * penalty_lambda * weights[i] * weights[j]
 
-    offset = penalty_lambda * max_cap**2
+    offset = penalty_lambda * Knapsack.max_cap**2
+
+    # dummy hamiltonian
+    # Q = np.identity(n=N)
 
     return Q, offset
 
 def calculate_hamiltonian_vector_b(Q):
-    b = {}
-    n = len(Q)
+    n = Q.shape[0]
+    b = np.zeros(shape=(n))
     for i in range(n):
         b[i] = -sum([Q[i,j] + Q[j,i] for j in range(n)])
 
+    # dummy hamiltonian
+    # b = np.ones(shape=(Q.shape[0]))
+
     return b
 
+
+def create_pauli_z_string(N, j, k):
+    """
+    creates a pauli string that has only 'I' characters, but at position j and k it has 'Z'
+    """
+    output = ["I"] * N
+
+    if j >= 0 and j < N: output[j] = "Z"
+    if k >= 0 and k < N: output[k] = "Z"
+
+    return "".join(output)
+def get_cost_hamiltonian(penalty_lambda):
+    """
+    returns the cost hamiltonian as a SparsePauliOp
+    """
+    Q, offset = calculate_Q_matrix(penalty_lambda)
+    b = calculate_hamiltonian_vector_b(Q)
+
+    N = Q.shape[0] # number of qubits
+
+    pauli_list = []
+
+    for i in range(N):
+
+        # single Z paulis
+        coefficient = b[i]
+        pauli_string = create_pauli_z_string(N, N - i - 1, -1)
+        pauli_list.append(("-" + pauli_string, coefficient))
+        # TODO: is this "-" needed?
+
+        # double Z paulis
+        for j in range(N):
+            if i == j: continue
+            coefficient = Q[i, j]
+            # right most character of pauli word is qubit 0 (qiskit's little-endian convention)
+            pauli_string = create_pauli_z_string(N, N - i - 1, N - j - 1)
+            pauli_list.append((pauli_string, coefficient))
+
+
+    hamiltonian = SparsePauliOp.from_list(pauli_list)
+    # print(hamiltonian)
+    # print(hamiltonian.to_matrix())
+    return hamiltonian
 
 # creates a quantum circuit for qaoa applied to the knapsack problem with given knapsack problem input
 # p_layers must be >= 2
 def qaoa_circuit_knapsack_linear_schedule(penalty_lambda, p_layers, shots=10000):
 
-    if len(items_values) != len(items_weights):
+    if len(Knapsack.items_values) != len(Knapsack.items_weights):
         raise ValueError('invalid input values or weights')
 
     Q, offset = calculate_Q_matrix(penalty_lambda)
     b = calculate_hamiltonian_vector_b(Q)
 
-    num_slack_variables = math.ceil(math.log2(max_cap))
+    num_slack_variables = math.ceil(math.log2(Knapsack.max_cap))
     # number of qubits equals number of items + slack variables
-    num_items = len(items_values)
+    num_items = len(Knapsack.items_values)
     num_qubits = num_items + num_slack_variables
     # print("Numer of qubits: " + str(num_qubits), "(", num_items, " items, ", num_slack_variables, " slack variables)")
 
@@ -88,7 +130,6 @@ def qaoa_circuit_knapsack_linear_schedule(penalty_lambda, p_layers, shots=10000)
 
     # all qubit pairs
     pairs = [(a,b) for i, a in enumerate(range(num_qubits)) for b in range(num_qubits)[i + 1:]]
-    # print(pairs)
 
     # p repetitions of cost and mixer layer
     for layer in range(p_layers):
@@ -104,6 +145,35 @@ def qaoa_circuit_knapsack_linear_schedule(penalty_lambda, p_layers, shots=10000)
         for i in range(num_qubits):
             qc.rx(2 * betas[layer], i)
 
+
+    return qc, num_items
+
+def qaoa_knapsack_expectation_value(penalty_lambda, p_layers):
+    """
+    Returns the expectation value of the qaoa knapsack quantum circuit
+    :param penalty_lambda:
+    :param p_layers:
+    :return:
+    """
+    qc, num_items = qaoa_circuit_knapsack_linear_schedule(penalty_lambda, p_layers)
+
+    qc.save_statevector("sv")
+
+    operator = Operator(get_cost_hamiltonian(penalty_lambda))
+
+    aer_sim = AerSimulator()
+    circ = transpile(qc, aer_sim)
+    result = aer_sim.run(circ, shots=10000).result()
+    statevector = result.data()["sv"]
+    exv = statevector.expectation_value(oper=operator) # operator is cost hamiltonian
+
+    print("expectation value: ", exv)
+
+    return exv
+
+
+def simulate_qaoa_knapsack(penalty_lambda, p_layers, shots=10000):
+    qc, num_items = qaoa_circuit_knapsack_linear_schedule(penalty_lambda, p_layers, shots)
 
     # measure qubits (should I?)
     for i in range(num_items):
@@ -128,15 +198,15 @@ def qaoa_circuit_knapsack_linear_schedule(penalty_lambda, p_layers, shots=10000)
 # creates a quantum circuit for qaoa applied to the knapsack problem with given knapsack problem input
 def qaoa_circuit_knapsack_parameterized(penalty_lambda, p_layers):
 
-    if len(items_values) != len(items_weights):
+    if len(Knapsack.items_values) != len(Knapsack.items_weights):
         raise ValueError('invalid input values or weights')
 
     Q, offset = calculate_Q_matrix(penalty_lambda)
     b = calculate_hamiltonian_vector_b(Q)
 
-    num_slack_variables = math.ceil(math.log2(max_cap))
+    num_slack_variables = math.ceil(math.log2(Knapsack.max_cap))
     # number of qubits equals number of items + slack variables
-    num_items = len(items_values)
+    num_items = len(Knapsack.items_values)
     num_qubits = num_items + num_slack_variables
     # print("Numer of qubits: " + str(num_qubits), "(", num_items, " items, ", num_slack_variables, " slack variables)")
 
@@ -196,9 +266,7 @@ def qaoa_circuit_knapsack_parameterized(penalty_lambda, p_layers):
 
 
 # get benchmark score for given qaoa configuration
-def qaoa_benchmark(penalty_lambda, p_layers, shots, optimal_config):
-
-    counts = qaoa_circuit_knapsack_linear_schedule(penalty_lambda, p_layers, shots)
+def qaoa_benchmark_most_sampled_bitstring(penalty_lambda, p_layers, optimal_config, counts):
 
     # get value of configuration from most sampled bitstring
     most_sampled_bitstring = None
@@ -208,6 +276,40 @@ def qaoa_benchmark(penalty_lambda, p_layers, shots, optimal_config):
             most_sampled_bitstring = bitstring
             max_sample = counts[bitstring]
 
+    val = get_bitstring_knapsack_score(most_sampled_bitstring, optimal_config)
+    print("lambda=", penalty_lambda, ", p=", p_layers, ": val of best solution: ", val)
+    return val
+
+def qaoa_benchmark_max_value_bitstring(penalty_lambda, p_layers, optimal_config, counts):
+
+    # get bitstring from samples that has the highest value
+    max_value = -1
+    best_bitstring = None
+    for bitstring in counts:
+        val = get_bitstring_knapsack_score(bitstring, optimal_config, False)
+        if val > max_value:
+            max_value = val
+            best_bitstring = bitstring
+
+    print("lambda=", penalty_lambda, ", p=", p_layers, ": bitstring sampled with highest value: ", best_bitstring, " val: ", max_value)
+    return max_value
+
+def qaoa_benchmark_optimal_samples(optimal_config, counts):
+
+    # get number of samples of optimal solution of problem
+    if optimal_config["bitstring"] in counts:
+        return counts[optimal_config["bitstring"]]
+    return 0
+
+class BenchmarkStrategy(Enum):
+    MOST_SAMPLED = 0,
+    MAX_VALUE = 1,
+    OPTIMAL_SAMPLES = 2,
+
+# returns a value that benchmarks the current qaoa configuration with different strategies
+def qaoa_benchmark(penalty_lambda, p_layers, shots, optimal_config, strategy : BenchmarkStrategy, counts):
+
+    # print("counts sampled bitstrings: ", len(counts))
     # get number of invalid bitstrings
     valid_count = 0
     for bitstring in counts:
@@ -218,21 +320,36 @@ def qaoa_benchmark(penalty_lambda, p_layers, shots, optimal_config):
         print("???")
         print(counts)
 
-    val = get_bitstring_knapsack_score(most_sampled_bitstring, optimal_config)
-    print("lambda=", penalty_lambda, ", p=", p_layers, ": val of best solution: ", val)
-    print("number of samples: ", shots, ", valid bitstrings samples: " , valid_count, "(",  valid_count / shots * 100, "%)" )
-    return val
+    val = 0
+    if strategy == BenchmarkStrategy.MOST_SAMPLED:
+        # the bitstring that is sampled the most -> value of that bitstring
+        val = qaoa_benchmark_most_sampled_bitstring(penalty_lambda, p_layers, optimal_config, counts)
+    elif strategy == BenchmarkStrategy.MAX_VALUE:
+        # the bitstring from the samples that gives the highest problem value -> value of that bitstring
+        val = qaoa_benchmark_max_value_bitstring(penalty_lambda, p_layers, optimal_config, counts)
+    elif strategy == BenchmarkStrategy.OPTIMAL_SAMPLES:
+        # the number of samples of the optimal solution (from bruteforce)
+        val = qaoa_benchmark_optimal_samples(optimal_config, counts)
+
+    valid_percentage = valid_count / shots
+    print("number of samples: ", shots, ", valid bitstrings samples: " , valid_count, "(", valid_percentage * 100 , "%)" )
+
+    return val, valid_percentage
+
+def qaoa_run_and_benchmark(penalty_lambda, p_layers, shots, optimal_config, strategy : BenchmarkStrategy):
+    counts = simulate_qaoa_knapsack(penalty_lambda, p_layers, shots)
+    return qaoa_benchmark(penalty_lambda, p_layers, shots, optimal_config, strategy, counts)
 
 # tries different values for the parameters p and lambda and benchmarks the QAOA result
 # by getting the value of the most sampled solution from the QAOA
-def optimize_qaoa(shots=10000):
+def optimize_qaoa(strategy, shots=10000):
     optimal_config = optimize_knapsack_bruteforce()
 
     max = -1
     max_config = None
-    for penalty_lambda in [0.5, 1, 2, 5, 10, 50, 100, 200]:
-        for p_layers in [2, 3, 5, 10, 12, 15, 20]:
-            val = qaoa_benchmark(penalty_lambda, p_layers, shots, optimal_config)
+    for penalty_lambda in [0.5, 1, 2, 5, 10, 50, 100, 200, 1000, 10000, 100000]:
+        for p_layers in [2, 3, 5, 10, 12, 15, 20, 30]:
+            val = qaoa_run_and_benchmark(penalty_lambda, p_layers, shots, optimal_config, strategy)
             print("lambda=", penalty_lambda, "p=", p_layers,", val of best solution: ", val)
             if val > max:
                 max_config = {
@@ -242,6 +359,7 @@ def optimize_qaoa(shots=10000):
                 }
                 max = val
 
+    print("\n=== QAOA Benchmark complete ===")
     print("Best config: ")
     print(max_config)
     if "val" in max_config:
@@ -249,6 +367,11 @@ def optimize_qaoa(shots=10000):
 
     # first experiment gives: lambda=1, p_layers=15 (?)
     # first experiment gives: lambda=0, p_layers=5 (?) (1278 samples of optimum (10K samples total))
+
+def calculate_hamiltonian_ground_state(h):
+    calc = GroundStateEigensolver(mapper, numpy_solver)
+    res = calc.solve(es_problem)
+    print(res)
 
 # summary
 # - TODO: estimation or sampling using simulator to get expectation values/early results => verify circuit
