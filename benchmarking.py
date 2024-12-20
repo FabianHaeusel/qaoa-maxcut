@@ -6,6 +6,7 @@ import maxCut
 import util
 import graph_util
 
+
 class BenchmarkStrategy(Enum):
     MOST_SAMPLED = 0,
     MAX_VALUE = 1,
@@ -124,7 +125,7 @@ def qaoa_benchmark(graph: PyGraph, p_layers, shots, optimal_config, strategy: Be
 
 def qaoa_run_and_benchmark(graph: PyGraph, p_layers, shots, optimal_config, strategy: BenchmarkStrategy, plot_config):
     """
-    Runs the qaoa maxcut simulation and performs benchmarking of the results.
+    Runs the qaoa maxCut simulation and performs benchmarking of the results.
     :param graph: the graph to which the maxCut problem is applied
     :param p_layers: number of layers of qaoa
     :param shots: number of samples

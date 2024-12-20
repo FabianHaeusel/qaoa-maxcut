@@ -49,6 +49,7 @@ def visualize_maxcut_qaoa_circuit():
     qaoa.draw_qaoa_maxcut_circuit(graph_util.example_graphs()[1], 2, style)
     qaoa.draw_qaoa_maxcut_circuit(graph_util.example_graphs()[2], 1, style)
 
+
 def visualize_only_cost_layer():
     """
     Saves image of simplified (isolated) qaoa cost layer (quantum gates)
@@ -67,6 +68,7 @@ def visualize_only_cost_layer():
 
     plt.savefig("qaoa-cost-layer.png", dpi=500)
     plt.show()
+
 
 def visualize_only_mixer_layer():
     """
@@ -95,5 +97,6 @@ def create_all_visualizations():
     visualize_maxcut_qaoa_circuit()
     visualize_only_cost_layer()
     visualize_only_mixer_layer()
+
 
 create_all_visualizations()

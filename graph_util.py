@@ -70,6 +70,7 @@ def save_graph(graph: PyGraph, filename: str):
 def show_and_save_graph(graph: PyGraph, filename: str, node_color=None):
     """
     Shows the graph and saves an image of it to the /output folder.
+    (Saves high resolution image, change dpi to a lower number for lower resolution images)
     :param graph: the graph
     :param filename: the filename to save the image to
     :param node_color: the colors of the nodes

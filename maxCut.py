@@ -76,11 +76,11 @@ def get_bitstring_maxcut_relative_value(graph: PyGraph, bitstring, optimal_confi
 
 def simulate_qaoa_maxcut(graph, p_layers, optimal_config, shots=10000):
     """
-    Simulates the qaoa maxcut circuit using qiskit AerSimulator
+    Simulates the qaoa maxcCut circuit using qiskit AerSimulator
     :param graph: graph for which the maxCut problem is computed
-    :param p_layers: nubmer of layers (p)
+    :param p_layers: number of layers (p)
     :param optimal_config: optimal solution of the problem
-    :param shots: nubmer of samples that are taken by the simulator
+    :param shots: number of samples that are taken by the simulator
     :return: the counts, which contain number of samples for each sampled bitstring
     """
     qc = qaoa.qaoa_circuit_maxcut_linear_schedule(graph, p_layers)
