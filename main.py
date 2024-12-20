@@ -4,6 +4,7 @@ from matplotlib import pyplot as plot
 import maxCut
 import benchmarking
 import graph_util
+import os
 
 
 def plot_influence_of_p(graph: PyGraph, plot_config):
@@ -218,6 +219,9 @@ def create_plots_for_influence_problem_size(pEqualN=False):
         plot_config["influence_problem_size_filename"] = "influence-problem-size-p=n.png"
     plot_influence_of_problem_size(plot_config, pEqualN)
 
+# create folder outputs for plots if it does not exist
+if not os.path.exists("output"):
+    os.mkdir("output")
 
 def create_plots():
     """
