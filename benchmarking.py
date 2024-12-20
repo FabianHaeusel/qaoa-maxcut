@@ -112,7 +112,7 @@ def qaoa_benchmark(graph: PyGraph, p_layers, shots, optimal_config, strategy: Be
         val = qaoa_benchmark_most_sampled_bitstring(graph, p_layers, optimal_config, counts, plot_config)
     elif strategy == BenchmarkStrategy.MAX_VALUE:
         # the bitstring from the samples that gives the highest problem value -> value of that bitstring relative
-        val = qaoa_benchmark_max_value_bitstring(graph, p_layers, optimal_config, counts, plot_config)
+        val = qaoa_benchmark_max_value_bitstring(graph, p_layers, optimal_config, counts)
     elif strategy == BenchmarkStrategy.OPTIMAL_SAMPLES:
         # the percentage of samples of the optimal solution (from bruteforce)
         val = qaoa_benchmark_optimal_samples(optimal_config, counts, shots)

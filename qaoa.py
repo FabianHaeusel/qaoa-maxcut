@@ -22,7 +22,7 @@ def qaoa_circuit_maxcut_linear_schedule(graph: PyGraph, p_layers):
     for i in range(num_qubits):
         qc.h(i)
 
-    # linear schedule of circuit pararmeters gamma, beta
+    # linear schedule of circuit parameters gamma, beta
     if p_layers == 1:
         gammas = [1]
     else:

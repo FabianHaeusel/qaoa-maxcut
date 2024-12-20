@@ -71,7 +71,6 @@ def visualize_only_cost_layer():
 def visualize_only_mixer_layer():
     """
     Saves image of qaoa mixer layer gates
-    :return:
     """
     qc = QuantumCircuit(2, name="Quantum Circuit")
 
